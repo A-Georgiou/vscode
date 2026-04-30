@@ -489,11 +489,13 @@ export class CopilotCloudSessionsProvider extends Disposable implements vscode.C
 					vscode.window.showErrorMessage(l10n.t('No active repository found to create pull request.'));
 					return;
 				}
-				// Import task API client types for the response
-				const { StubTaskApiClient } = await import('./taskApiBackend');
-				const taskApiClient = new StubTaskApiClient(this.logService);
-				const prResult = await taskApiClient.createPRForTask(repoId.org, repoId.repo, identity.taskId);
-				vscode.window.showInformationMessage(l10n.t('Pull request #{0} created successfully.', prResult.number));
+				// Route through the backend's task API client if available
+				if ('createPRForTask' in this._backend && typeof (this._backend as any).createPRForTask === 'function') {
+					const prResult = await (this._backend as any).createPRForTask(repoId.org, repoId.repo, identity.taskId);
+					vscode.window.showInformationMessage(l10n.t('Pull request #{0} created successfully.', prResult.number));
+				} else {
+					vscode.window.showWarningMessage(l10n.t('PR creation is not yet available for task-based sessions.'));
+				}
 				this.refresh();
 			} catch (err) {
 				this.logService.error(`createPullRequestForTask failed: ${err}`);

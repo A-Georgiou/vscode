@@ -215,7 +215,7 @@ export class TaskApiBackend implements CloudAgentBackend {
 					id: String(pullArtifact.data.global_id ?? pullArtifact.data.id),
 					number: pullArtifact.data.id,
 					title: task.name ?? '',
-					state: task.state === 'completed' ? 'OPEN' : 'OPEN',
+					state: task.state === 'completed' ? 'MERGED' : task.state === 'failed' || task.state === 'cancelled' ? 'CLOSED' : 'OPEN',
 					url: task.html_url ?? '',
 					createdAt: task.created_at,
 					updatedAt: task.updated_at ?? task.created_at,
@@ -251,17 +251,27 @@ export class TaskApiBackend implements CloudAgentBackend {
 		let logs = '';
 
 		try {
-			const response = await this._taskApiClient.getTaskEvents(taskId, { per_page: 100 });
-			const events = response.events;
+			// Fetch all events with pagination
+			let allEvents: import('./taskApiTypes').SessionEvent[] = [];
+			let page = 1;
+			const perPage = 100;
+			let hasMore = true;
+
+			while (hasMore) {
+				const response = await this._taskApiClient.getTaskEvents(taskId, { page, per_page: perPage });
+				allEvents = allEvents.concat(response.events);
+				hasMore = response.events.length === perPage;
+				page++;
+			}
 
 			// Extract initial prompt from first user.message event
-			const firstUserMessage = events.find(e => e.type === 'user.message');
+			const firstUserMessage = allEvents.find(e => e.type === 'user.message');
 			if (firstUserMessage && typeof firstUserMessage.data['content'] === 'string') {
 				initialPrompt = firstUserMessage.data['content'];
 			}
 
 			// Serialize events as JSON for the content builder
-			logs = JSON.stringify(events, undefined, 2);
+			logs = JSON.stringify(allEvents, undefined, 2);
 		} catch (e) {
 			this._logService.warn(`Failed to fetch events for task ${taskId}: ${e}`);
 		}
@@ -292,8 +302,20 @@ export class TaskApiBackend implements CloudAgentBackend {
 
 	async getSessionLogs(sessionId: string): Promise<string> {
 		try {
-			const response = await this._taskApiClient.getTaskEvents(sessionId, { per_page: 100 });
-			return JSON.stringify(response.events, undefined, 2);
+			// Fetch all events with pagination
+			let allEvents: import('./taskApiTypes').SessionEvent[] = [];
+			let page = 1;
+			const perPage = 100;
+			let hasMore = true;
+
+			while (hasMore) {
+				const response = await this._taskApiClient.getTaskEvents(sessionId, { page, per_page: perPage });
+				allEvents = allEvents.concat(response.events);
+				hasMore = response.events.length === perPage;
+				page++;
+			}
+
+			return JSON.stringify(allEvents, undefined, 2);
 		} catch (e) {
 			this._logService.warn(`Failed to fetch events for task ${sessionId}: ${e}`);
 			return '';
@@ -319,7 +341,8 @@ export class TaskApiBackend implements CloudAgentBackend {
 			const task = await this._taskApiClient.getTask(sessionId);
 			const state = task.state;
 			if (state === 'in_progress' || state === 'completed' || state === 'failed' ||
-				state === 'timed_out' || state === 'cancelled') {
+				state === 'timed_out' || state === 'cancelled' ||
+				state === 'idle' || state === 'waiting_for_user') {
 				return taskToSessionInfo(task);
 			}
 			await new Promise(resolve => setTimeout(resolve, TASK_SESSION_POLL_INTERVAL_MS));
